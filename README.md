@@ -1,5 +1,7 @@
 # multirun
 
+[![Github-sponsors](https://img.shields.io/badge/sponsor-30363D?logo=GitHub-Sponsors&logoColor=#EA4AAA)](https://github.com/sponsors/nicolas-van) [![GitHub Repo stars](https://img.shields.io/github/stars/nicolas-van/multirun?style=social)](https://github.com/nicolas-van/multirun/stargazers)
+
 A simple Unix utility in Go to run multiple commands concurrently.
 
 * A very light alternative to classic init processes or supervisord to run multiple services in the same Docker container.
