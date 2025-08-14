@@ -2,6 +2,8 @@
 
 [![Github-sponsors](https://img.shields.io/badge/sponsor-30363D?logo=GitHub-Sponsors&logoColor=#EA4AAA)](https://github.com/sponsors/nicolas-van) [![GitHub Repo stars](https://img.shields.io/github/stars/nicolas-van/multirun?style=social)](https://github.com/nicolas-van/multirun/stargazers)
 
+> **Note**: This project is a Go conversion of the original C application by [nicolas-van](https://github.com/nicolas-van/multirun). The conversion was performed by Jules, an AI assistant from Google.
+
 A simple Unix utility in Go to run multiple commands concurrently.
 
 * A very light alternative to classic init processes or supervisord to run multiple services in the same Docker container.
@@ -21,7 +23,7 @@ Unlike most process managers multirun never attempts to restart one of its child
 
 ### From sources
 
-This project necessitates Go 1.18 or newer.
+This project necessitates Go 1.18 or newer and a Linux environment.
 
 ```bash
 go build .
@@ -45,14 +47,14 @@ This will create a `multirun` executable in the current directory.
 
 *The Docker documentation and most best practices documents regarding Docker tells that you should embed no more than one application per container*. This is indeed perfectly true.
 
-One container is meant to contain one application. If you want to deploy multiple applications at once (like a web server and a database) you should arrange your containers to properly communicate with the external world using network and volumes, make them easily configurable though environment variables and pack everything in a [docker-compose](https://docs.docker.com/compose/) or similar tool configuration. That is the correct way to do the job 95% of the time. It will allow you to keep each application separate from each other, to isolate their respective environments, to manage their lifecycle separately, to identify clearly which volume is dedicated to what, to scale all applications independently, etc...
+One container is meant to contain one application. If you want to deploy multiple applications at once (like a web server and a a database) you should arrange your containers to properly communicate with the external world using network and volumes, make them easily configurable though environment variables and pack everything in a [docker-compose](https://docs.docker.com/compose/) or similar tool configuration. That is the correct way to do the job 95% of the time. It will allow you to keep each application separate from each other, to isolate their respective environments, to manage their lifecycle separately, to identify clearly which volume is dedicated to what, to scale all applications independently, etc...
 
 Then there is the remaining 5% where it's hard to define precisely what an application is. An application is not just a single process (countless web servers and databases spawn multiple processes for performance reason) nor a number of processes doing the same thing (again, a lot of applications spawn different processes with different purposes). Multirun, or any process manager in general, should be considered in a Docker container only for those specific cases where you consider that a single application necessitate multiple processes to fulfill its single purpose.
 
 Here are some good use cases where multirun can be useful:
 
 * You want to launch multiple homogeneous single-threaded processes to effectively use multiple CPUs (and, for some reason, scaling your containers doesn't fit you): There often exist some technology-specific solutions for this but for simple needs multirun can be useful.
-* You need to deploy an old-school Unix-style multi-process *"I've been coded in the 8s"* *"Those kids, they have it too easy with all their threads and their garbage collectors!"* service where the same base code yields multiple executable files that must all run concurrently: Multirun can be useful.
+* You need to deploy an old-school Unix-style multi-process *"I've been coded in the 80s"* *"Those kids, they have it too easy with all their threads and their garbage collectors!"* service where the same base code yields multiple executable files that must all run concurrently: Multirun can be useful.
 * You have multiple heterogeneous processes that serve the same purpose, use the same filesystem and that filesystem isn't meant to be persisted (AKA you don't want to use volumes for that filesystem): Multirun can be useful.
 
 Here is an example of bad use case:
@@ -103,11 +105,3 @@ exec service2_executable
 ```
 
 If it still doesn't work launch multirun in verbose mode and try to understand what's going on. Your problem is probably caused by a child process that doesn't exit properly or not fast enough when it receives a signal.
-
-## Contributing
-
-[See the contribution guide.](CONTRIBUTING.md)
-
-## License
-
-[See the license.](LICENSE.md)
