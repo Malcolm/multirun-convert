@@ -1,7 +1,5 @@
 # multirun
 
-[![Github-sponsors](https://img.shields.io/badge/sponsor-30363D?logo=GitHub-Sponsors&logoColor=#EA4AAA)](https://github.com/sponsors/nicolas-van) [![GitHub Repo stars](https://img.shields.io/github/stars/nicolas-van/multirun?style=social)](https://github.com/nicolas-van/multirun/stargazers)
-
 > **Note**: This project is a Go conversion of the original C application by [nicolas-van](https://github.com/nicolas-van/multirun). The conversion was performed by Jules, an AI assistant from Google.
 
 A simple Unix utility in Go to run multiple commands concurrently.
