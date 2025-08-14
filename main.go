@@ -1,3 +1,5 @@
+//go:build linux
+
 package main
 
 import (
@@ -12,6 +14,26 @@ import (
 var (
 	verbose bool
 )
+
+func setSubreaper() {
+	// From linux/prctl.h, since this is not exported by the standard syscall package.
+	const PR_SET_CHILD_SUBREAPER = 36
+
+	// We make a raw syscall to avoid depending on golang.org/x/sys
+	// and to keep the project self-contained.
+	// The arguments to prctl(PR_SET_CHILD_SUBREAPER, 1) are simple enough
+	// that a 3-argument syscall is sufficient.
+	_, _, errno := syscall.Syscall(syscall.SYS_PRCTL, PR_SET_CHILD_SUBREAPER, 1, 0)
+	if errno != 0 {
+		if verbose {
+			fmt.Printf("multirun: failed to register as subreaper (errno: %d), subchildren exit status might be ignored.\n", errno)
+		}
+	} else {
+		if verbose {
+			fmt.Println("multirun: successfully registered as subreaper.")
+		}
+	}
+}
 
 type subprocess struct {
 	cmd     *exec.Cmd

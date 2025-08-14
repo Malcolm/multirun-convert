@@ -1,3 +1,5 @@
+//go:build linux
+
 package main
 
 import (
@@ -6,7 +8,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-	"runtime"
 )
 
 // TestMain allows us to intercept the test run.
@@ -21,9 +22,6 @@ func TestMain(m *testing.M) {
 }
 
 func TestFailureCase(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Skipping test on Windows due to reliance on 'sleep' and 'sh' commands")
-	}
 	testBin := os.Args[0]
 
 	start := time.Now()
@@ -55,9 +53,6 @@ func TestFailureCase(t *testing.T) {
 }
 
 func TestSignalPropagation(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Skipping test on Windows due to reliance on POSIX signals")
-	}
 	testBin := os.Args[0]
 
 	cmd := exec.Command(testBin, "sleep 5", "sleep 5")
