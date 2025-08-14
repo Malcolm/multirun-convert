@@ -58,6 +58,18 @@ func main() {
 		os.Exit(2)
 	}
 
+	// Check for chained commands, which are not supported.
+	// We manually parse the command string to detect unquoted shell operators.
+	// This is more robust than a simple string search, as it correctly
+	// handles quoted arguments that may contain special characters.
+	for _, command := range commands {
+		if isChained(command) {
+			fmt.Fprintln(os.Stderr, "multirun: error: chained commands are not supported.")
+			fmt.Fprintln(os.Stderr, "Please provide each command as a separate argument.")
+			os.Exit(2)
+		}
+	}
+
 	subprocesses := make(map[int]*subprocess)
 
 	for _, command := range commands {
@@ -183,6 +195,36 @@ func main() {
 		fmt.Println("multirun: all subprocesses exited without errors")
 	}
 	os.Exit(0)
+}
+
+// isChained checks if a command string contains unquoted shell operators.
+// It handles single quotes, double quotes, and backslash escapes.
+func isChained(command string) bool {
+	var inQuote rune = 0
+	var escaped bool = false
+	for _, r := range command {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if r == '\\' {
+			escaped = true
+			continue
+		}
+		if inQuote != 0 {
+			if r == inQuote {
+				inQuote = 0 // End of quote
+			}
+		} else {
+			switch r {
+			case '\'', '"':
+				inQuote = r // Start of quote
+			case ';', '|', '&':
+				return true // Found an unquoted operator
+			}
+		}
+	}
+	return false
 }
 
 type exitResult struct {
