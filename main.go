@@ -11,20 +11,24 @@ import (
 	"syscall"
 )
 
+// logf prints a formatted message to stdout if verbose mode is enabled.
+func logf(verbose bool, format string, v ...interface{}) {
+	if verbose {
+		fmt.Printf("multirun: "+format+"\n", v...)
+	}
+}
+
 // setSubreaper ensures that multirun adopts any orphaned grandchild processes.
-// This is crucial for cleaning up all descendants properly.
-func setSubreaper() {
+func setSubreaper(verbose bool) {
 	// From linux/prctl.h, since this is not exported by the standard syscall package.
 	const PR_SET_CHILD_SUBREAPER = 36
 	// We make a raw syscall to avoid depending on golang.org/x/sys
 	// and to keep the project self-contained.
 	_, _, errno := syscall.Syscall(syscall.SYS_PRCTL, PR_SET_CHILD_SUBREAPER, 1, 0)
 	if errno != 0 {
-		// This is not a fatal error, but we should log it if verbose.
-		// We can't use the logger here because it's not initialized yet.
-		if os.Getenv("MULTIRUN_VERBOSE") == "1" {
-			fmt.Printf("multirun: failed to register as subreaper (errno: %d), subchildren exit status might be ignored.\n", errno)
-		}
+		logf(verbose, "failed to register as subreaper (errno: %d), subchildren exit status might be ignored.", errno)
+	} else {
+		logf(verbose, "successfully registered as subreaper.")
 	}
 }
 
@@ -45,26 +49,24 @@ type multirun struct {
 }
 
 func main() {
-	// We need to set the subreaper status as early as possible.
-	setSubreaper()
-
-	app := &multirun{
-		subprocesses: make(map[int]*subprocess),
-		exitChan:     make(chan *subprocess, 1),
-		sigChan:      make(chan os.Signal, 1),
-	}
-
-	flag.BoolVar(&app.verbose, "v", false, "verbose mode")
+	// 1. Define and parse command-line flags immediately.
+	var verbose bool
+	flag.BoolVar(&verbose, "v", false, "verbose mode")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s <options> command...\n", os.Args[0])
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 
-	// The verbose flag is used by the logger, so we set it as an env var
-	// for the subreaper function, which runs before the flag is parsed.
-	if app.verbose {
-		os.Setenv("MULTIRUN_VERBOSE", "1")
+	// 2. Set subreaper status, now that we know the verbose setting.
+	setSubreaper(verbose)
+
+	// 3. Create the application instance.
+	app := &multirun{
+		verbose:      verbose,
+		subprocesses: make(map[int]*subprocess),
+		exitChan:     make(chan *subprocess, 1),
+		sigChan:      make(chan os.Signal, 1),
 	}
 
 	commands := flag.Args()
@@ -75,14 +77,11 @@ func main() {
 
 	if err := app.startSubprocesses(commands); err != nil {
 		fmt.Fprintf(os.Stderr, "multirun: %v\n", err)
-		os.Exit(2) // Exit with a different code for startup errors
+		os.Exit(2)
 	}
 
-	// If no processes were started, exit immediately.
 	if len(app.subprocesses) == 0 {
-		if app.verbose {
-			fmt.Println("multirun: no processes were successfully started.")
-		}
+		logf(app.verbose, "no processes were successfully started.")
 		os.Exit(1)
 	}
 
@@ -93,9 +92,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if app.verbose {
-		fmt.Println("multirun: all subprocesses exited without errors")
-	}
+	logf(app.verbose, "all subprocesses exited without errors")
 	os.Exit(0)
 }
 
@@ -117,7 +114,6 @@ func (app *multirun) startSubprocesses(commands []string) error {
 		}
 
 		if err := cmd.Start(); err != nil {
-			// Log the error but continue trying to start other processes.
 			fmt.Fprintf(os.Stderr, "multirun: error starting command '%s': %v\n", command, err)
 			continue
 		}
@@ -125,9 +121,8 @@ func (app *multirun) startSubprocesses(commands []string) error {
 		pid := cmd.Process.Pid
 		proc.up = true
 		app.subprocesses[pid] = proc
-		app.logf("launched command \"%s\" with pid %d", command, pid)
+		logf(app.verbose, "launched command \"%s\" with pid %d", command, pid)
 
-		// Start a goroutine to wait for this process to exit.
 		go func(p *subprocess) {
 			p.err = p.cmd.Wait()
 			app.exitChan <- p
@@ -151,31 +146,28 @@ func (app *multirun) handleEvents() (hadErrors bool) {
 			proc.up = false
 
 			if !isNormalExit(proc.err) {
-			// Overwrite the error with a simple one for tracking.
-			proc.err = fmt.Errorf("abnormal exit")
-				app.logf("command \"%s\" with pid %d exited abnormally", proc.command, proc.cmd.Process.Pid)
+				proc.err = fmt.Errorf("abnormal exit")
+				logf(app.verbose, "command \"%s\" with pid %d exited abnormally", proc.command, proc.cmd.Process.Pid)
 			} else {
-			// Clear the error if the exit was normal (e.g., exit 0 or killed by SIGTERM).
-			proc.err = nil
-				app.logf("command \"%s\" with pid %d exited normally", proc.command, proc.cmd.Process.Pid)
+				proc.err = nil
+				logf(app.verbose, "command \"%s\" with pid %d exited normally", proc.command, proc.cmd.Process.Pid)
 			}
 
 			if !closing {
 				closing = true
-				app.logf("one process exited, sending SIGTERM to all other processes")
+				logf(app.verbose, "one process exited, sending SIGTERM to all other processes")
 				app.shutdown(syscall.SIGTERM)
 			}
 
 		case sig := <-app.sigChan:
 			if !closing {
 				closing = true
-				app.logf("received signal %s, propagating to all subprocesses", sig)
+				logf(app.verbose, "received signal %s, propagating to all subprocesses", sig)
 				app.shutdown(sig.(syscall.Signal))
 			}
 		}
 	}
 
-	// After all processes have exited, check if any of them had an error.
 	for _, proc := range app.subprocesses {
 		if proc.err != nil {
 			return true
@@ -188,9 +180,7 @@ func (app *multirun) handleEvents() (hadErrors bool) {
 func (app *multirun) shutdown(signal syscall.Signal) {
 	for pid, proc := range app.subprocesses {
 		if proc.up {
-			// Kill the entire process group.
 			if err := syscall.Kill(-pid, signal); err != nil {
-				// ESRCH means the process is already dead, which is fine.
 				if err != syscall.ESRCH {
 					fmt.Fprintf(os.Stderr, "multirun: error killing process group %d: %v\n", pid, err)
 				}
@@ -200,15 +190,13 @@ func (app *multirun) shutdown(signal syscall.Signal) {
 }
 
 // isNormalExit checks if a process exit error is considered "normal".
-// Normal exits are exit code 0 or termination by SIGINT/SIGTERM.
 func isNormalExit(err error) bool {
 	if err == nil {
-		return true // Exit code 0
+		return true
 	}
 
 	exitErr, ok := err.(*exec.ExitError)
 	if !ok {
-		// This should not happen with cmd.Wait()
 		return false
 	}
 
@@ -230,7 +218,6 @@ func isNormalExit(err error) bool {
 }
 
 // isChained checks if a command string contains unquoted shell operators.
-// It handles single quotes, double quotes, and backslash escapes.
 func isChained(command string) bool {
 	var inQuote rune = 0
 	var escaped bool = false
@@ -245,23 +232,16 @@ func isChained(command string) bool {
 		}
 		if inQuote != 0 {
 			if r == inQuote {
-				inQuote = 0 // End of quote
+				inQuote = 0
 			}
 		} else {
 			switch r {
 			case '\'', '"':
-				inQuote = r // Start of quote
+				inQuote = r
 			case ';', '|', '&':
-				return true // Found an unquoted operator
+				return true
 			}
 		}
 	}
 	return false
-}
-
-// logf prints a formatted message to stdout if verbose mode is enabled.
-func (app *multirun) logf(format string, v ...interface{}) {
-	if app.verbose {
-		fmt.Printf("multirun: "+format+"\n", v...)
-	}
 }
