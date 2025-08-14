@@ -5,6 +5,7 @@ package main
 import (
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -80,5 +81,117 @@ func TestSignalPropagation(t *testing.T) {
 		t.Errorf("Expected a nil error after graceful shutdown, but got: %v", waitErr)
 	} else {
 		t.Logf("multirun exited gracefully as expected.")
+	}
+}
+
+func TestChainedCommandsAreRejected(t *testing.T) {
+	testBin := os.Args[0]
+
+	testCases := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "Single command with &&",
+			args: []string{"echo hello && echo world"},
+		},
+		{
+			name: "Single command with ;",
+			args: []string{"echo hello; echo world"},
+		},
+		{
+			name: "Single command with |",
+			args: []string{"echo hello | grep hello"},
+		},
+		{
+			name: "Single command with &",
+			args: []string{"sleep 1 &"},
+		},
+		{
+			name: "Multiple commands with one chained",
+			args: []string{"echo hello", "sleep 1 && sleep 1"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command(testBin, tc.args...)
+			cmd.Env = append(os.Environ(), "GO_TEST_MODE_RUN_MAIN=1")
+
+			output, err := cmd.CombinedOutput()
+
+			if err == nil {
+				t.Fatal("Expected multirun to exit with an error, but it succeeded.")
+			}
+
+			exitErr, ok := err.(*exec.ExitError)
+			if !ok {
+				t.Fatalf("Expected an ExitError, but got %T: %v", err, err)
+			}
+
+			if exitErr.ExitCode() != 2 {
+				t.Errorf("Expected exit code 2, but got %d", exitErr.ExitCode())
+			}
+
+			expectedError := "multirun: error: chained commands are not supported."
+			if !strings.Contains(string(output), expectedError) {
+				t.Errorf("Expected output to contain '%s', but it didn't.\nOutput:\n%s", expectedError, string(output))
+			}
+		})
+	}
+}
+
+func TestCommandsWithSpecialCharsInArgsAreAccepted(t *testing.T) {
+	testBin := os.Args[0]
+
+	// These commands contain special characters, but they are inside
+	// quoted arguments or escaped, so they should be accepted.
+	testCases := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "Ampersand in double quotes",
+			args: []string{`echo "hello&world"`},
+		},
+		{
+			name: "Pipe in single quotes",
+			args: []string{`echo 'hello|world'`},
+		},
+		{
+			name: "Semicolon in double quotes",
+			args: []string{`echo "hello;world"`},
+		},
+		{
+			name: "Nested quotes",
+			args: []string{`echo "a'b&c'd"`},
+		},
+		{
+			name: "Escaped quote",
+			args: []string{`echo "a\"b&c\"d"`},
+		},
+		{
+			name: "Escaped backslash",
+			args: []string{`echo "a\\&b"`},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command(testBin, tc.args...)
+			cmd.Env = append(os.Environ(), "GO_TEST_MODE_RUN_MAIN=1")
+
+			err := cmd.Run()
+
+			if err != nil {
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					if exitErr.ExitCode() == 2 {
+						t.Errorf("Expected command to be accepted, but it was rejected with exit code 2.")
+					}
+				} else {
+					t.Fatalf("Command failed with an unexpected error: %v", err)
+				}
+			}
+		})
 	}
 }
