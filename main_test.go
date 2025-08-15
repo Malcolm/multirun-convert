@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"strings"
@@ -27,11 +28,15 @@ func TestFailureCase(t *testing.T) {
 
 	start := time.Now()
 	// The second command will exit immediately with an error code
-	cmd := exec.Command(testBin, "sleep 5", `sh -c "exit 1"`)
+	cmd := exec.Command(testBin, "-v", "sleep 5", `sh -c "exit 1"`)
 	cmd.Env = append(os.Environ(), "GO_TEST_MODE_RUN_MAIN=1")
 
 	output, err := cmd.CombinedOutput()
 	duration := time.Since(start)
+
+	if testing.Verbose() {
+		t.Logf("multirun output:\n%s", string(output))
+	}
 
 	if err == nil {
 		t.Fatal("Expected multirun to exit with an error, but it succeeded.")
@@ -50,14 +55,17 @@ func TestFailureCase(t *testing.T) {
 	if duration > 1*time.Second {
 		t.Errorf("Expected multirun to exit quickly, but it took %v", duration)
 	}
-	t.Logf("multirun exited quickly as expected. Output:\n%s", string(output))
 }
 
 func TestSignalPropagation(t *testing.T) {
 	testBin := os.Args[0]
 
-	cmd := exec.Command(testBin, "sleep 5", "sleep 5")
+	cmd := exec.Command(testBin, "-v", "sleep 5", "sleep 5")
 	cmd.Env = append(os.Environ(), "GO_TEST_MODE_RUN_MAIN=1")
+
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
 
 	err := cmd.Start()
 	if err != nil {
@@ -76,11 +84,13 @@ func TestSignalPropagation(t *testing.T) {
 	// Wait for the process to exit
 	waitErr := cmd.Wait()
 
+	if testing.Verbose() {
+		t.Logf("multirun output:\n%s", output.String())
+	}
+
 	// We expect a nil error because multirun should catch the signal and exit gracefully with code 0.
 	if waitErr != nil {
 		t.Errorf("Expected a nil error after graceful shutdown, but got: %v", waitErr)
-	} else {
-		t.Logf("multirun exited gracefully as expected.")
 	}
 }
 
@@ -119,6 +129,10 @@ func TestChainedCommandsAreRejected(t *testing.T) {
 			cmd.Env = append(os.Environ(), "GO_TEST_MODE_RUN_MAIN=1")
 
 			output, err := cmd.CombinedOutput()
+
+			if testing.Verbose() {
+				t.Logf("multirun output:\n%s", string(output))
+			}
 
 			if err == nil {
 				t.Fatal("Expected multirun to exit with an error, but it succeeded.")
@@ -181,7 +195,11 @@ func TestCommandsWithSpecialCharsInArgsAreAccepted(t *testing.T) {
 			cmd := exec.Command(testBin, tc.args...)
 			cmd.Env = append(os.Environ(), "GO_TEST_MODE_RUN_MAIN=1")
 
-			err := cmd.Run()
+			output, err := cmd.CombinedOutput()
+
+			if testing.Verbose() {
+				t.Logf("multirun output:\n%s", string(output))
+			}
 
 			if err != nil {
 				if exitErr, ok := err.(*exec.ExitError); ok {
