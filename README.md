@@ -29,6 +29,22 @@ go build .
 
 This will create a `multirun` executable in the current directory.
 
+### Cross-Compilation
+
+One of Go's strengths is its ability to easily cross-compile for different operating systems and architectures. Since `multirun` is a pure Go application intended for Linux, you can easily build binaries for different CPU architectures.
+
+To do this, you can set the `GOOS` (target operating system) and `GOARCH` (target architecture) environment variables. For a more portable binary, it's also recommended to build it statically by setting `CGO_ENABLED=0`, which prevents it from linking against system C libraries.
+
+**For amd64 (standard 64-bit Intel/AMD):**
+```bash
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o multirun-amd64 .
+```
+
+**For arm64 (64-bit ARM, e.g., Raspberry Pi 4):**
+```bash
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o multirun-arm64 .
+```
+
 ## Technical Description of Behavior
 
 * multirun launches all its children in separate process groups.
