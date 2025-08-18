@@ -23,6 +23,34 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func TestEnvironmentVariablePropagation(t *testing.T) {
+	testBin := os.Args[0]
+	testEnvVarName := "MULTIRUN_TEST_VAR"
+	testEnvVarValue := "special_test_value_123" // Make it unique
+
+	// Command that prints the environment variable.
+	command := `sh -c "printf %s $` + testEnvVarName + `"`
+
+	cmd := exec.Command(testBin, "-v", command) // Add -v for consistency
+
+	// Set the environment for the multirun process.
+	cmd.Env = append(os.Environ(), "GO_TEST_MODE_RUN_MAIN=1")
+	cmd.Env = append(cmd.Env, testEnvVarName+"="+testEnvVarValue)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// If the command exits with an error, that's a failure.
+		// multirun should exit 0 if the subprocess exits 0.
+		t.Fatalf("multirun failed unexpectedly: %v. Output:\n%s", err, string(output))
+	}
+
+	// The output will contain log lines from multirun and the output from our command.
+	// We just need to check that our special value is present.
+	if !bytes.Contains(output, []byte(testEnvVarValue)) {
+		t.Errorf("Expected output to contain '%s', but it didn't.\nOutput:\n%s", testEnvVarValue, string(output))
+	}
+}
+
 func TestFailureCase(t *testing.T) {
 	testBin := os.Args[0]
 

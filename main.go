@@ -106,6 +106,7 @@ func (app *multirun) startSubprocesses(commands []string) error {
 		cmd := exec.Command("sh", "-c", "exec "+command)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
+		cmd.Env = os.Environ()
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 		proc := &subprocess{
