@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"os"
 	"os/exec"
@@ -180,6 +181,85 @@ func TestChainedCommandsAreRejected(t *testing.T) {
 				t.Errorf("Expected output to contain '%s', but it didn't.\nOutput:\n%s", expectedError, string(output))
 			}
 		})
+	}
+}
+
+func TestConfigFile(t *testing.T) {
+	testBin := os.Args[0]
+
+	configFile, err := os.CreateTemp("", "multirun-test-*.conf")
+	if err != nil {
+		t.Fatalf("Failed to create temp config file: %v", err)
+	}
+	defer os.Remove(configFile.Name())
+
+	configContent := `
+p1:sh -c 'echo "p1 out" && sleep 10'
+p2:sh -c 'echo "p2 out" && sleep 10'
+`
+	if _, err := configFile.WriteString(configContent); err != nil {
+		t.Fatalf("Failed to write to temp config file: %v", err)
+	}
+	configFile.Close()
+
+	cmd := exec.Command(testBin, "-v", "-f", configFile.Name())
+	cmd.Env = append(os.Environ(), "GO_TEST_MODE_RUN_MAIN=1")
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("Failed to get stdout pipe: %v", err)
+	}
+	cmd.Stderr = cmd.Stdout // Redirect stderr to stdout for easier capture
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Failed to start multirun: %v", err)
+	}
+
+	// Read output concurrently and wait for expected lines
+	outputChan := make(chan string, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		var buffer strings.Builder
+		for scanner.Scan() {
+			line := scanner.Text()
+			if testing.Verbose() {
+				t.Log(line)
+			}
+			buffer.WriteString(line + "\n")
+			// Check if we have seen both outputs
+			if strings.Contains(buffer.String(), "[p1] p1 out") &&
+				strings.Contains(buffer.String(), "[p2] p2 out") {
+				outputChan <- buffer.String()
+				return
+			}
+		}
+	}()
+
+	// Wait for the expected output or timeout
+	var fullOutput string
+	select {
+	case fullOutput = <-outputChan:
+		// We got the expected output
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for initial process output")
+	}
+
+	// Final check of the output
+	if !strings.Contains(fullOutput, "[p1] p1 out") {
+		t.Errorf("Expected output to contain '[p1] p1 out', but it didn't.\nOutput:\n%s", fullOutput)
+	}
+	if !strings.Contains(fullOutput, "[p2] p2 out") {
+		t.Errorf("Expected output to contain '[p2] p2 out', but it didn't.\nOutput:\n%s", fullOutput)
+	}
+
+	// Gracefully shut down the process
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("Failed to send SIGTERM to multirun: %v", err)
+	}
+
+	// Expect a graceful exit (err is nil)
+	if err := cmd.Wait(); err != nil {
+		t.Errorf("Expected multirun to exit gracefully, but got error: %v", err)
 	}
 }
 

@@ -3,11 +3,15 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
+	"sync"
 	"syscall"
 )
 
@@ -32,6 +36,12 @@ func setSubreaper(verbose bool) {
 	}
 }
 
+// commandWithPrefix stores a command and its associated output prefix.
+type commandWithPrefix struct {
+	prefix  string
+	command string
+}
+
 // subprocess holds the state of a single child process.
 type subprocess struct {
 	cmd     *exec.Cmd
@@ -46,33 +56,38 @@ type multirun struct {
 	subprocesses map[int]*subprocess
 	exitChan     chan *subprocess
 	sigChan      chan os.Signal
+	wg           sync.WaitGroup
 }
 
 func main() {
-	// 1. Define and parse command-line flags immediately.
 	var verbose bool
+	var configFile string
 	flag.BoolVar(&verbose, "v", false, "verbose mode")
+	flag.StringVar(&configFile, "f", "", "path to config file with commands")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s <options> command...\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s <options> [command...]\n", os.Args[0])
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 
-	// 2. Set subreaper status, now that we know the verbose setting.
 	setSubreaper(verbose)
 
-	// 3. Create the application instance.
-	app := &multirun{
-		verbose:      verbose,
-		subprocesses: make(map[int]*subprocess),
-		exitChan:     make(chan *subprocess, 1),
-		sigChan:      make(chan os.Signal, 1),
+	commands, err := loadCommands(configFile, flag.Args())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "multirun: %v\n", err)
+		os.Exit(2)
 	}
 
-	commands := flag.Args()
 	if len(commands) == 0 {
 		flag.Usage()
 		os.Exit(2)
+	}
+
+	app := &multirun{
+		verbose:      verbose,
+		subprocesses: make(map[int]*subprocess),
+		exitChan:     make(chan *subprocess, len(commands)),
+		sigChan:      make(chan os.Signal, 1),
 	}
 
 	if err := app.startSubprocesses(commands); err != nil {
@@ -87,6 +102,8 @@ func main() {
 
 	hadErrors := app.handleEvents()
 
+	app.wg.Wait()
+
 	if hadErrors {
 		fmt.Fprintln(os.Stderr, "multirun: one or more of the provided commands ended abnormally")
 		os.Exit(1)
@@ -96,33 +113,102 @@ func main() {
 	os.Exit(0)
 }
 
+// loadCommands loads commands from a config file or command line arguments.
+func loadCommands(configFile string, args []string) ([]commandWithPrefix, error) {
+	if configFile != "" {
+		return loadCommandsFromFile(configFile)
+	}
+
+	if len(args) == 0 {
+		return nil, nil
+	}
+
+	var commands []commandWithPrefix
+	for _, arg := range args {
+		commands = append(commands, commandWithPrefix{command: arg, prefix: ""}) // prefix is empty for now
+	}
+	return commands, nil
+}
+
+// loadCommandsFromFile reads commands from a file.
+func loadCommandsFromFile(path string) ([]commandWithPrefix, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("error opening config file: %w", err)
+	}
+	defer file.Close()
+
+	var commands []commandWithPrefix
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		parts := strings.SplitN(line, ":", 2)
+		var cmd commandWithPrefix
+		if len(parts) == 2 {
+			cmd.prefix = strings.TrimSpace(parts[0])
+			cmd.command = strings.TrimSpace(parts[1])
+		} else {
+			cmd.command = line
+			cmd.prefix = line // Default prefix is the command itself
+		}
+		commands = append(commands, cmd)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading config file: %w", err)
+	}
+
+	return commands, nil
+}
+
 // startSubprocesses launches all the commands as child processes.
-func (app *multirun) startSubprocesses(commands []string) error {
-	for _, command := range commands {
-		if isChained(command) {
+func (app *multirun) startSubprocesses(commands []commandWithPrefix) error {
+	for _, c := range commands {
+		if isChained(c.command) {
 			return fmt.Errorf("error: chained commands are not supported. Please provide each command as a separate argument")
 		}
 
-		cmd := exec.Command("sh", "-c", "exec "+command)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd := exec.Command("sh", "-c", "exec "+c.command)
 		cmd.Env = os.Environ()
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
+		// If a prefix is defined, set up pipes to capture and prefix output.
+		// Otherwise, connect directly to stdout/stderr.
+		if c.prefix != "" {
+			stdout, err := cmd.StdoutPipe()
+			if err != nil {
+				return fmt.Errorf("error creating stdout pipe for '%s': %w", c.command, err)
+			}
+			stderr, err := cmd.StderrPipe()
+			if err != nil {
+				return fmt.Errorf("error creating stderr pipe for '%s': %w", c.command, err)
+			}
+			app.wg.Add(2)
+			go app.prefixOutput(stdout, c.prefix, os.Stdout)
+			go app.prefixOutput(stderr, c.prefix, os.Stderr)
+		} else {
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+		}
+
 		proc := &subprocess{
 			cmd:     cmd,
-			command: command,
+			command: c.command,
 		}
 
 		if err := cmd.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "multirun: error starting command '%s': %v\n", command, err)
+			fmt.Fprintf(os.Stderr, "multirun: error starting command '%s': %v\n", c.command, err)
 			continue
 		}
 
 		pid := cmd.Process.Pid
 		proc.up = true
 		app.subprocesses[pid] = proc
-		logf(app.verbose, "launched command \"%s\" with pid %d", command, pid)
+		logf(app.verbose, "launched command \"%s\" with pid %d", c.command, pid)
 
 		go func(p *subprocess) {
 			p.err = p.cmd.Wait()
@@ -130,6 +216,18 @@ func (app *multirun) startSubprocesses(commands []string) error {
 		}(proc)
 	}
 	return nil
+}
+
+// prefixOutput reads from a reader, prefixes each line, and writes to a writer.
+func (app *multirun) prefixOutput(reader io.Reader, prefix string, writer io.Writer) {
+	defer app.wg.Done()
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		fmt.Fprintf(writer, "[%s] %s\n", prefix, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		logf(app.verbose, "error reading output for prefix '%s': %v", prefix, err)
+	}
 }
 
 // handleEvents is the main event loop. It waits for signals or process exits

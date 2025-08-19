@@ -15,6 +15,30 @@ Usage: `multirun "command1" "command2" ...`
 
 You can also add the `-v` option to get a full log of the processes it starts and kills.
 
+### Configuration File
+
+As an alternative to passing commands as arguments, you can use a configuration file by specifying the `-f` flag:
+
+`multirun -f /path/to/config.file`
+
+The configuration file should contain one command per line. You can also specify a prefix for the output of each command by using the following format:
+
+`prefix:command`
+
+Here is an example of a configuration file:
+
+```
+# This is a comment, it will be ignored
+app1:/app/bin/server -c /app/etc/config.json
+app2:/app/bin/worker
+/app/bin/another-service
+```
+
+In this example:
+- The output of the first command will be prefixed with `[app1] `.
+- The output of the second command will be prefixed with `[app2] `.
+- The output of the third command will be prefixed with `[/app/bin/another-service] `, as the command itself is used as a prefix when none is provided.
+
 Unlike most process managers multirun never attempts to restart one of its children if it crashes. Instead it will kill all its other children before exiting with an error code. This behavior is ideal when you just want to delegate the restart duty to the upper level, as example using systemd or Docker restart policies.
 
 ## Installation
